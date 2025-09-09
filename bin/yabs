@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-YABS_SH="$REPO_ROOT/src/yabs/yabs.sh"
+YABS_SH="$REPO_ROOT/src/yabs.sh"
 
 if [[ ! -f "$YABS_SH" ]]; then
   echo "Error: upstream YABS script not found at $YABS_SH" >&2
-  echo "Have you added the subtree? Try: git subtree add --prefix=src/yabs https://github.com/masonr/yet-another-bench-script.git master --squash" >&2
+  echo "Have you added the subtree? Try: git subtree add --prefix=src https://github.com/masonr/yet-another-bench-script.git master --squash" >&2
   exit 1
 fi
 

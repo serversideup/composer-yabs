@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Update src/yabs from upstream
+    name: Update src from upstream
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -50,13 +50,13 @@ jobs:
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           git checkout -b "$branch"
 
-      - name: Pull subtree into src/yabs
+      - name: Pull subtree into src
         id: subtree
         run: |
           set -euo pipefail
           # Pull latest from upstream master into subtree prefix
           # Using --squash to keep our history tidy, matching the guidance in bin/yabs
-          if git subtree pull --prefix=src/yabs https://github.com/masonr/yet-another-bench-script.git master --squash -m "chore: sync src/yabs from upstream"; then
+          if git subtree pull --prefix=src/ https://github.com/masonr/yet-another-bench-script.git master --squash -m "chore: sync src from upstream"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             # git subtree returns non-zero if there are no changes to merge
@@ -76,7 +76,7 @@ jobs:
           if git diff --staged --quiet; then
             if ! git diff --quiet; then
               git add -A
-              git commit -m "chore: sync src/yabs from upstream"
+              git commit -m "chore: sync src/ from upstream"
             fi
           fi
 
@@ -92,11 +92,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          title="chore: sync src/yabs from upstream"
+          title="chore: sync src/ from upstream"
           body=$(cat << 'EOF'
-          Automated subtree sync for `src/yabs` from upstream `masonr/yet-another-bench-script`.
+          Automated subtree sync for `src/` from upstream `masonr/yet-another-bench-script`.
 
-          - Strategy: `git subtree pull --prefix=src/yabs ... --squash`
+          - Strategy: `git subtree pull --prefix=src/ ... --squash`
           - Triggered by: ${{ github.event_name }}
           EOF
           )
@@ -131,7 +131,7 @@ jobs:
           files=$(gh pr diff "$pr" --name-only)
           only_subtree=true
           while IFS= read -r f; do
-            [[ "$f" == "src/yabs" || "$f" == src/yabs/* ]] || { only_subtree=false; break; }
+            [[ "$f" == "src/" || "$f" == src/* ]] || { only_subtree=false; break; }
           done <<< "$files"
           if [[ "$author" == "github-actions[bot]" && "$head_owner" == "$owner" && "$head_ref" == chore/sync-yabs-* && "$only_subtree" == true ]]; then
             echo "allow=true" >> "$GITHUB_OUTPUT"
@@ -149,4 +149,4 @@ jobs:
 
       - name: No changes
         if: steps.subtree.outputs.changed != 'true'
-        run: echo "No upstream changes for src/yabs; skipping PR."
+        run: echo "No upstream changes for src/; skipping PR."
