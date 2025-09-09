@@ -1,0 +1,152 @@
+name: Sync upstream YABS subtree
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 5 * * *'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: subtree-sync-yabs
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Update src/yabs from upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure git-subtree is available
+        run: |
+          if ! git subtree --help >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y git
+          fi
+
+      - name: Add upstream remote if missing
+        run: |
+          if ! git remote get-url upstream >/dev/null 2>&1; then
+            git remote add upstream https://github.com/masonr/yet-another-bench-script.git
+          fi
+          git fetch upstream --tags --prune
+
+      - name: Create update branch
+        id: branch
+        run: |
+          ts=$(date -u +"%Y%m%d-%H%M%S")
+          branch="chore/sync-yabs-${ts}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git checkout -b "$branch"
+
+      - name: Pull subtree into src/yabs
+        id: subtree
+        run: |
+          set -euo pipefail
+          # Pull latest from upstream master into subtree prefix
+          # Using --squash to keep our history tidy, matching the guidance in bin/yabs
+          if git subtree pull --prefix=src/yabs https://github.com/masonr/yet-another-bench-script.git master --squash -m "chore: sync src/yabs from upstream"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            # git subtree returns non-zero if there are no changes to merge
+            echo "No subtree changes detected or pull failed. Checking diff..."
+            if git diff --quiet; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Commit changes (if any)
+        if: steps.subtree.outputs.changed == 'true'
+        run: |
+          # Ensure commit exists; subtree pull usually commits, but be safe
+          if git diff --staged --quiet; then
+            if ! git diff --quiet; then
+              git add -A
+              git commit -m "chore: sync src/yabs from upstream"
+            fi
+          fi
+
+      - name: Push branch
+        if: steps.subtree.outputs.changed == 'true'
+        run: |
+          git push --set-upstream origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Create PR (gh)
+        if: steps.subtree.outputs.changed == 'true'
+        id: cpr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="chore: sync src/yabs from upstream"
+          body=$(cat << 'EOF'
+          Automated subtree sync for `src/yabs` from upstream `masonr/yet-another-bench-script`.
+
+          - Strategy: `git subtree pull --prefix=src/yabs ... --squash`
+          - Triggered by: ${{ github.event_name }}
+          EOF
+          )
+          # Create PR if it doesn't already exist for this branch
+          gh pr create \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "$title" \
+            --body "$body" \
+            --label chore \
+            --label dependencies || true
+          # Capture PR number
+          pr_number=$(gh pr view --head "${{ steps.branch.outputs.branch }}" --json number --jq .number)
+          echo "pull-request-number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Validate PR is safe to automerge (gh)
+        if: steps.subtree.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number != ''
+        id: guard
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pr="${{ steps.cpr.outputs.pull-request-number }}"
+          if [[ -z "$pr" ]]; then
+            echo "allow=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo="${GITHUB_REPOSITORY##*/}"
+          author=$(gh pr view "$pr" --json author --jq .author.login)
+          head_ref=$(gh pr view "$pr" --json headRefName --jq .headRefName)
+          head_owner=$(gh pr view "$pr" --json headRepositoryOwner --jq .headRepositoryOwner.login)
+          files=$(gh pr diff "$pr" --name-only)
+          only_subtree=true
+          while IFS= read -r f; do
+            [[ "$f" == "src/yabs" || "$f" == src/yabs/* ]] || { only_subtree=false; break; }
+          done <<< "$files"
+          if [[ "$author" == "github-actions[bot]" && "$head_owner" == "$owner" && "$head_ref" == chore/sync-yabs-* && "$only_subtree" == true ]]; then
+            echo "allow=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "allow=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enable auto-merge (safe PR only, gh)
+        if: steps.guard.outputs.allow == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge "${{ steps.cpr.outputs.pull-request-number }}" --squash --auto
+
+      - name: No changes
+        if: steps.subtree.outputs.changed != 'true'
+        run: echo "No upstream changes for src/yabs; skipping PR."
