@@ -1,4 +1,4 @@
-# composer-yabs
+# composer-yet-another-bench-script
 
 A thin Composer-distributed wrapper around the upstream Yet-Another-Bench-Script (YABS).
 
