@@ -50,34 +50,31 @@ jobs:
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
           git checkout -b "$branch"
 
-      - name: Pull subtree into src
-        id: subtree
+      - name: Run sync script
+        id: syncscript
         run: |
-          set -euo pipefail
-          before=$(git rev-parse HEAD)
-          # Pull latest from upstream master into subtree prefix
-          # Using --squash to keep our history tidy, matching the guidance in bin/yabs
-          if git subtree pull --prefix=src/ https://github.com/masonr/yet-another-bench-script.git master --squash -m "chore: sync src from upstream"; then
-            after=$(git rev-parse HEAD)
-            if [[ "$before" != "$after" ]] || ! git diff --quiet; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "Subtree pull reported success but no changes detected; skipping."
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            fi
+          chmod +x ./sync-yabs.sh
+          set +e
+          output=$(./sync-yabs.sh \
+            --prefix src/ \
+            --message "chore: sync src from upstream" \
+            --remote-url https://github.com/masonr/yet-another-bench-script.git \
+            --branch master | tee /tmp/sync-yabs.out)
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Sync script failed" >&2
+            exit 1
+          fi
+          if grep -qE '^changed=true$' /tmp/sync-yabs.out; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            # git subtree may return non-zero; double-check for any diffs
-            echo "Subtree pull failed or no changes. Checking diff..."
-            if git diff --quiet; then
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            else
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            fi
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Commit changes (if any)
-        if: steps.subtree.outputs.changed == 'true'
+        if: steps.syncscript.outputs.changed == 'true'
         run: |
           # Ensure commit exists; subtree pull usually commits, but be safe
           if git diff --staged --quiet; then
@@ -88,12 +85,12 @@ jobs:
           fi
 
       - name: Push branch
-        if: steps.subtree.outputs.changed == 'true'
+        if: steps.syncscript.outputs.changed == 'true'
         run: |
           git push --set-upstream origin "${{ steps.branch.outputs.branch }}"
 
       - name: Create PR (gh)
-        if: steps.subtree.outputs.changed == 'true'
+        if: steps.syncscript.outputs.changed == 'true'
         id: cpr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -107,18 +104,20 @@ jobs:
           - Triggered by: ${{ github.event_name }}
           EOF
           )
-          # Capture PR number
-          pr_number=$(gh pr view "${{ steps.branch.outputs.branch }}" --json number --jq .number || true)
-          echo "pull-request-number=${pr_number:-}" >> "$GITHUB_OUTPUT"
-            --body "$body" \
-            --label chore \
-            --label dependencies || true
-          # Capture PR number
-          pr_number=$(gh pr view --head "${{ steps.branch.outputs.branch }}" --json number --jq .number)
+          pr_number=$(gh pr view --head "${{ steps.branch.outputs.branch }}" --json number --jq .number 2>/dev/null || true)
+          if [[ -z "$pr_number" ]]; then
+            gh pr create \
+              --title "$title" \
+              --body "$body" \
+              --head "${{ steps.branch.outputs.branch }}" \
+              --label chore \
+              --label dependencies
+            pr_number=$(gh pr view --head "${{ steps.branch.outputs.branch }}" --json number --jq .number)
+          fi
           echo "pull-request-number=$pr_number" >> "$GITHUB_OUTPUT"
 
       - name: Validate PR is safe to automerge (gh)
-        if: steps.subtree.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number != ''
+        if: steps.syncscript.outputs.changed == 'true' && steps.cpr.outputs.pull-request-number != ''
         id: guard
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -154,5 +153,5 @@ jobs:
           gh pr merge "${{ steps.cpr.outputs.pull-request-number }}" --squash --auto
 
       - name: No changes
-        if: steps.subtree.outputs.changed != 'true'
+        if: steps.syncscript.outputs.changed != 'true'
         run: echo "No upstream changes for src/; skipping PR."
