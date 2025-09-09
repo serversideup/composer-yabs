@@ -10,7 +10,7 @@ This package does not modify YABS. It only vendors the upstream script and expos
 ## Install
 
 ```bash
-composer require --dev serversideup/yabs
+composer require serversideup/yabs
 ```
 
 ## Usage
